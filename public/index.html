@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>舞台换景顺序优化</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header>
+    <h1>🎭 舞台换景顺序优化</h1>
+    <p>录入场景与道具，设置约束，计算道具增减次数最少的演出顺序（最多 12 个场景）。演出进行中还可确认已完成前缀、录入舞台实况，只重排剩余场景；道具还可汇总去重后进行巡演装箱（最多 14 件，按承重与互斥对求最少箱数）。</p>
+  </header>
+
+  <main>
+    <section class="card">
+      <div class="card-head">
+        <h2>1. 场景与道具</h2>
+        <div>
+          <button id="btn-add-scene" class="btn">＋ 添加场景</button>
+          <button id="btn-sample" class="btn btn-ghost">载入示例</button>
+          <button id="btn-sample-timed" class="btn btn-ghost">载入时长示例</button>
+        </div>
+      </div>
+
+      <div class="mode-switch" role="radiogroup" aria-label="编排模式">
+        <label class="mode-opt">
+          <input type="radio" name="mode" value="classic">
+          <span><strong>经典编排</strong><em>全部场景参演，仅最小化道具增减次数</em></span>
+        </label>
+        <label class="mode-opt">
+          <input type="radio" name="mode" value="timed">
+          <span><strong>时长受限编排</strong><em>按时长上限取舍可选场景：先最大化价值，再最小化换景</em></span>
+        </label>
+      </div>
+
+      <div class="limit-settings">
+        <label class="limit-opt">
+          <input type="checkbox" id="op-limit-enabled">
+          <span>限制单段道具操作上限</span>
+        </label>
+        <label id="op-limit-fields" hidden>
+          开场布置与每次换景，撤下 + 上台合计最多
+          <input type="number" id="op-limit" min="1" step="1" value="3"> 件
+        </label>
+        <span class="hint" id="op-limit-hint">不勾选时不限制每段的道具操作件数。</span>
+      </div>
+
+      <div class="timed-settings" id="timed-settings" hidden>
+        <label>整场时长上限：
+          <input type="number" id="time-limit" min="1" step="1" value="120"> 分钟
+        </label>
+        <span class="hint" id="required-duration-hint"></span>
+      </div>
+
+      <table id="scene-table">
+        <thead id="scene-thead">
+          <tr><th class="col-idx">#</th><th>场景名称</th><th>道具（用逗号分隔）</th><th class="col-op"></th></tr>
+        </thead>
+        <tbody id="scene-tbody"></tbody>
+      </table>
+      <p class="hint" id="scene-count"></p>
+    </section>
+
+    <section class="card">
+      <h2>2. 约束设置</h2>
+      <p class="hint" id="constraint-mode-hint"></p>
+      <div class="constraint-groups">
+        <div class="constraint-group">
+          <h3>前后依赖 <span class="hint">A 必须排在 B 之前</span></h3>
+          <div class="constraint-form" id="dep-form">
+            <select data-role="before"></select>
+            <span>在</span>
+            <select data-role="after"></select>
+            <span>之前</span>
+            <button class="btn" id="btn-add-dep">添加</button>
+          </div>
+          <ul class="constraint-list" id="dep-list"></ul>
+        </div>
+
+        <div class="constraint-group">
+          <h3>固定序位 <span class="hint">某场景必须排在第 N 位</span></h3>
+          <div class="constraint-form" id="fixed-form">
+            <select data-role="scene"></select>
+            <span>固定在第</span>
+            <input type="number" data-role="position" min="1" value="1">
+            <span>位</span>
+            <button class="btn" id="btn-add-fixed">添加</button>
+          </div>
+          <ul class="constraint-list" id="fixed-list"></ul>
+        </div>
+
+        <div class="constraint-group">
+          <h3>禁止相邻 <span class="hint">两个场景不能紧挨着演出</span></h3>
+          <div class="constraint-form" id="noadj-form">
+            <select data-role="a"></select>
+            <span>与</span>
+            <select data-role="b"></select>
+            <span>不相邻</span>
+            <button class="btn" id="btn-add-noadj">添加</button>
+          </div>
+          <ul class="constraint-list" id="noadj-list"></ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="card">
+      <div class="card-head">
+        <h2>3. 求解与方案管理</h2>
+      </div>
+      <div class="toolbar">
+        <button id="btn-solve" class="btn btn-primary">▶ 计算最优顺序</button>
+        <label class="alt-count-field">备选节目单
+          <select id="alt-count" title="一次最多请求 3 条顺序不同的可行编排；选 1 时只返回最优的一条">
+            <option value="1">仅最优 1 条</option>
+            <option value="2">2 条</option>
+            <option value="3">3 条</option>
+          </select>
+        </label>
+        <input type="text" id="plan-name" placeholder="方案名称">
+        <button id="btn-save" class="btn">💾 保存方案</button>
+        <button id="btn-new" class="btn btn-ghost">新建方案</button>
+      </div>
+      <div class="toolbar">
+        <select id="plan-select"><option value="">— 选择已保存的方案 —</option></select>
+        <button id="btn-load" class="btn">载入编辑</button>
+        <button id="btn-delete" class="btn btn-danger">删除</button>
+      </div>
+      <p class="hint" id="status-line"></p>
+    </section>
+
+    <section class="card" id="packing-card">
+      <div class="card-head">
+        <h2>4. 巡演装箱</h2>
+        <button id="btn-sync-packing" class="btn btn-ghost">↻ 同步道具清单</button>
+      </div>
+      <p class="hint" id="packing-count"></p>
+      <div class="packing-settings">
+        <label>单箱承重：
+          <input type="number" id="pack-capacity" min="1" step="1" value="10">
+        </label>
+        <span class="hint">每箱道具重量合计不得超过该值；每件道具的重量须为正整数。</span>
+      </div>
+      <table id="packing-table">
+        <thead>
+          <tr><th class="col-idx">#</th><th>道具</th><th class="col-pack-weight">重量</th></tr>
+        </thead>
+        <tbody id="packing-tbody"></tbody>
+      </table>
+      <div class="constraint-group packing-pairs">
+        <h3>不能同箱的道具对 <span class="hint">互斥道具不得装入同一箱</span></h3>
+        <div class="constraint-form" id="packpair-form">
+          <select data-role="a"></select>
+          <span>与</span>
+          <select data-role="b"></select>
+          <span>不同箱</span>
+          <button class="btn" id="btn-add-packpair">添加</button>
+        </div>
+        <ul class="constraint-list" id="packpair-list"></ul>
+      </div>
+      <div class="toolbar">
+        <button id="btn-pack" class="btn btn-primary">📦 计算装箱方案</button>
+        <span class="hint">在不超过 14 件道具内求箱数最少的完整分箱</span>
+      </div>
+      <div id="packing-result"></div>
+    </section>
+
+    <section class="card" id="result-card" hidden>
+      <h2>5. 计算结果</h2>
+      <div id="result"></div>
+    </section>
+  </main>
+
+  <script src="app.js"></script>
+</body>
+</html>

@@ -1,0 +1,18 @@
+{
+  "name": "stage-order-optimizer",
+  "version": "1.0.0",
+  "private": true,
+  "description": "舞台换景顺序优化 Web 应用：经典模式在依赖、固定序位、禁止相邻约束下求道具增减最少的演出顺序；时长受限模式按时长上限取舍必演/可选场景，先最大化价值再最小化换景",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "test": "node test/solver.test.js && node test/packing.test.js",
+    "fuzz": "node fuzz.js 400",
+    "fuzz:replan": "node fuzz-replan.js 2000",
+    "fuzz:alt": "node fuzz-alt.js 2000",
+    "fuzz:pack": "node fuzz-pack.js 400"
+  },
+  "dependencies": {
+    "express": "^4.19.2"
+  }
+}
