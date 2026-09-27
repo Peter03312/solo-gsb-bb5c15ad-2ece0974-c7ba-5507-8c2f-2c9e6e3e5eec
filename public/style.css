@@ -497,3 +497,97 @@ input[type="number"] { width: 70px; }
   padding: 2px 12px;
   font-size: 13.5px;
 }
+
+/* ================= 换景人员排班 ================= */
+.schedule-panel {
+  border: 1px dashed var(--accent-2);
+  border-radius: 8px;
+  padding: 14px 16px;
+  margin-top: 18px;
+  background: rgba(124, 92, 191, 0.05);
+}
+.schedule-panel h3 { margin: 0 0 6px; }
+.crew-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 10px 0 12px;
+  font-size: 14px;
+}
+.crew-item { display: inline-flex; align-items: center; gap: 4px; }
+.crew-name { width: 110px; }
+.schedule-table-head { margin: 6px 0 4px; }
+.schedule-table { max-width: 420px; margin-bottom: 10px; }
+.col-sched-min { width: 150px; }
+.schedule-minutes { width: 110px; }
+.schedule-missing { color: #ff9d9a; font-weight: bold; }
+.schedule-warn {
+  color: #ffd27a;
+  font-size: 13.5px;
+  margin: 6px 0 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.schedule-summary { margin-top: 14px; }
+
+.sched-seg {
+  background: var(--card-2);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--accent-2);
+  border-radius: 8px;
+  padding: 10px 14px;
+  margin-top: 10px;
+}
+.sched-seg-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  font-size: 14px;
+  margin-bottom: 8px;
+}
+.sched-seg-title { font-weight: bold; }
+.sched-seg-head strong { color: var(--accent); }
+.sched-phases {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: 10px;
+}
+.sched-phase {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 12px;
+}
+.sched-phase-remove { border-top: 2px solid #d98a88; }
+.sched-phase-add { border-top: 2px solid var(--ok); }
+.sched-phase-title { font-weight: bold; font-size: 14px; margin-bottom: 6px; }
+.sched-assign-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.sched-assign-list li {
+  background: var(--card-2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 5px 10px;
+  font-size: 13px;
+}
+.sched-worker {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 13.5px;
+  margin-bottom: 3px;
+}
+.sched-tasks { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
+.sched-arrow { color: var(--muted); font-size: 12px; }
+.sched-task {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 1px 9px;
+  white-space: nowrap;
+  font-size: 12.5px;
+}
+.sched-task em { color: var(--muted); font-style: normal; font-size: 11.5px; margin-left: 3px; }

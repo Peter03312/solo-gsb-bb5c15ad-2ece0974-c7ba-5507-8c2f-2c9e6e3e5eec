@@ -3,6 +3,9 @@
 /* ================= 状态 ================= */
 const MAX_SCENES = 12;
 const MAX_PACK_ITEMS = 14;
+const MAX_SCHED_TASKS = 14; // 每阶段（撤下/摆上）最多 14 项搬运任务
+const MIN_CREW = 2;
+const MAX_CREW = 4;
 let uidCounter = 0;
 const uid = () => `s${Date.now().toString(36)}_${uidCounter++}`;
 
@@ -18,6 +21,8 @@ const state = {
   replan: null, // 演出中重排会话：{ prefixIds, chainStartOrder, kDraft, stageProps }
   savedReplan: null, // 随方案保存的重排状态（载入后用于自动恢复）
   packing: null, // 巡演装箱配置：{ capacity, weights: { 道具名: 重量 }, pairs: [{ a, b }] }
+  crew: null, // 换景人员排班配置：{ workers: string[], durations: { 道具名: 分钟 } }
+  schedule: null, // 最近一次排班结果（仅当其 scheduleKey 与当前待执行步骤一致时有效）
 };
 
 const isTimed = () => state.mode === 'timed';
@@ -195,6 +200,8 @@ function applyMode(mode) {
   $('#result-card').hidden = true;
   state.live = null;
   state.replan = null;
+  state.crew = null;
+  state.schedule = null;
   syncOpLimitUI();
   renderAll();
 }
@@ -544,6 +551,7 @@ async function doSolve() {
   // 重新求解会取消演出中重排会话
   state.live = data.ok ? data : null;
   state.replan = null;
+  clearSchedule();
   renderResult(data);
 }
 
@@ -570,6 +578,7 @@ function renderResult(data) {
     box.appendChild(alternativesListBlock(data));
   }
   box.appendChild(replanPanelBlock(data));
+  box.appendChild(schedulePanelBlock(data));
   $('#result-card').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 }
 
@@ -736,7 +745,385 @@ async function doReplan(data, btn, msgEl) {
     stageProps: rp.stageProps.slice(),
   };
   state.live = res;
+  clearSchedule(); // 节目单已改变（前缀推进、后缀重排），旧排班作废
   renderResult(res);
+}
+
+/* ================= 换景人员排班 ================= */
+
+/** 默认排班配置：2 名工作人员、无任何工时。 */
+function defaultCrew() {
+  return { workers: ['人员1', '人员2'], durations: {} };
+}
+
+/** 取当前节目单中待执行（非"已完成"）的步骤。 */
+function pendingScheduleSteps(data) {
+  return (data.steps || []).filter(s => s.phase !== 'done');
+}
+
+/** 待执行步骤涉及的全部道具（段顺序、先撤下后摆上、段内顺序去重）。 */
+function collectScheduleProps(steps) {
+  const seen = new Set();
+  const out = [];
+  for (const s of steps) {
+    for (const p of [...(s.removed || []), ...(s.added || [])]) {
+      if (!seen.has(p)) { seen.add(p); out.push(p); }
+    }
+  }
+  return out;
+}
+
+/** 待执行步骤的稳定指纹：节目单或前缀推进导致步骤变化时，旧排班应作废。 */
+function scheduleStepsKey(steps) {
+  return JSON.stringify(steps.map(s => [
+    s.type,
+    s.scene || null,
+    s.from || null,
+    s.to || null,
+    s.removed || [],
+    s.added || [],
+  ]));
+}
+
+/** 清除旧排班（节目单或工时变化时调用；保留工作人员/工时输入本身）。 */
+function clearSchedule() {
+  state.schedule = null;
+  const box = document.getElementById('schedule-result');
+  if (box) box.innerHTML = '';
+}
+
+/** 清除旧排班并刷新排班面板（输入变化后只重建排班区，避免干扰其他面板焦点）。 */
+function refreshSchedulePanel(data) {
+  const old = document.getElementById('schedule-panel');
+  if (old) old.replaceWith(schedulePanelBlock(data));
+}
+
+/** 段标题：开场布置 / 从舞台实况切入 / 普通换景。 */
+function segmentTitle(seg) {
+  if (seg.type === 'setup') return `开场布置 →「${sceneName(seg.scene)}」`;
+  if (seg.fromStage) return `从当前舞台实际道具 →「${sceneName(seg.to)}」`;
+  return `换景：「${sceneName(seg.from)}」→「${sceneName(seg.to)}」`;
+}
+
+function schedulePanelBlock(data) {
+  if (!state.crew) state.crew = defaultCrew();
+  const crew = state.crew;
+  const steps = pendingScheduleSteps(data);
+  const props = collectScheduleProps(steps);
+
+  // 校对工时表：新道具补 null（待填），已删道具的旧工时清除
+  const dur = {};
+  for (const p of props) {
+    const v = Number(crew.durations[p]);
+    dur[p] = Number.isInteger(v) && v > 0 ? v : null;
+  }
+  crew.durations = dur;
+
+  // 旧排班只在指纹一致时有效
+  const key = scheduleStepsKey(steps);
+  if (state.schedule && state.schedule.scheduleKey !== key) state.schedule = null;
+
+  const wrap = document.createElement('div');
+  wrap.className = 'schedule-panel';
+  wrap.id = 'schedule-panel';
+
+  const h = document.createElement('h3');
+  h.textContent = '👥 换景人员排班';
+  wrap.appendChild(h);
+
+  const intro = document.createElement('p');
+  intro.className = 'hint';
+  intro.textContent = '对当前节目单中待执行的开场与换景步骤安排搬运：每段必须先撤完全部道具才能开始摆上；'
+    + '同一人一次只搬一件、不同人可并行。服务端求各段与全场的最短搬运耗时并给出稳定分工。';
+  wrap.appendChild(intro);
+
+  // 工作人员
+  const crewRow = document.createElement('div');
+  crewRow.className = 'crew-row';
+  crewRow.appendChild(Object.assign(document.createElement('span'), { textContent: '工作人员（2～4 名）：' }));
+  crew.workers.forEach((name, wi) => {
+    const item = document.createElement('span');
+    item.className = 'crew-item';
+    const inp = document.createElement('input');
+    inp.type = 'text';
+    inp.className = 'crew-name';
+    inp.value = name;
+    inp.addEventListener('input', () => {
+      crew.workers[wi] = inp.value;
+      clearSchedule();
+      refreshValidity();
+    });
+    item.appendChild(inp);
+    if (crew.workers.length > MIN_CREW) {
+      const del = document.createElement('button');
+      del.className = 'btn btn-sm btn-danger';
+      del.textContent = '✕';
+      del.title = '移除该人员';
+      del.addEventListener('click', () => {
+        crew.workers.splice(wi, 1);
+        clearSchedule();
+        refreshSchedulePanel(data);
+      });
+      item.appendChild(del);
+    }
+    crewRow.appendChild(item);
+  });
+  if (crew.workers.length < MAX_CREW) {
+    const add = document.createElement('button');
+    add.className = 'btn btn-sm';
+    add.textContent = '＋ 添加人员';
+    add.addEventListener('click', () => {
+      crew.workers.push(`人员${crew.workers.length + 1}`);
+      clearSchedule();
+      refreshSchedulePanel(data);
+    });
+    crewRow.appendChild(add);
+  }
+  wrap.appendChild(crewRow);
+
+  // 逐件工时表
+  const overSteps = steps
+    .map((s, i) => ({ s, i }))
+    .filter(({ s }) => (s.removed || []).length > MAX_SCHED_TASKS || (s.added || []).length > MAX_SCHED_TASKS);
+  const over = overSteps.length > 0;
+  const tableHead = document.createElement('p');
+  tableHead.className = 'hint schedule-table-head';
+  tableHead.textContent = `每件道具单次搬运所需的正整数分钟（撤下与摆上同值），共 ${props.length} 种待搬运道具`;
+  wrap.appendChild(tableHead);
+
+  const table = document.createElement('table');
+  table.className = 'schedule-table';
+  const thead = document.createElement('thead');
+  thead.innerHTML = '<tr><th class="col-idx">#</th><th>道具</th><th class="col-sched-min">单次工时(分钟)</th></tr>';
+  table.appendChild(thead);
+  const tbody = document.createElement('tbody');
+  props.forEach((p, i) => {
+    const tr = document.createElement('tr');
+    const tdIdx = document.createElement('td');
+    tdIdx.textContent = i + 1;
+    const tdName = document.createElement('td');
+    tdName.textContent = p;
+    if (crew.durations[p] === null) tdName.classList.add('schedule-missing');
+    const tdM = document.createElement('td');
+    const inp = document.createElement('input');
+    inp.type = 'number';
+    inp.className = 'schedule-minutes';
+    inp.min = '1';
+    inp.step = '1';
+    if (crew.durations[p] !== null) inp.value = crew.durations[p];
+    inp.placeholder = '必填';
+    inp.addEventListener('input', () => {
+      const v = Math.floor(Number(inp.value) || 0);
+      crew.durations[p] = v > 0 ? v : null;
+      tdName.classList.toggle('schedule-missing', crew.durations[p] === null);
+      clearSchedule(); // 工时改变，旧排班作废
+      refreshValidity();
+    });
+    tdM.appendChild(inp);
+    tr.append(tdIdx, tdName, tdM);
+    tbody.appendChild(tr);
+  });
+  table.appendChild(tbody);
+  wrap.appendChild(table);
+
+  // 超限 / 缺工时提示
+  const warn = document.createElement('div');
+  warn.className = 'schedule-warn';
+
+  const actions = document.createElement('div');
+  actions.className = 'toolbar';
+  const btn = document.createElement('button');
+  btn.className = 'btn btn-primary';
+  btn.textContent = '🗓 计算人员排班';
+  btn.addEventListener('click', () => doSchedule(data, btn));
+  actions.appendChild(btn);
+  actions.appendChild(Object.assign(document.createElement('span'), {
+    className: 'hint',
+    textContent: `仅排待执行的 ${steps.length} 个步骤；已完成前缀不参与排班。`,
+  }));
+  wrap.appendChild(actions);
+
+  // 根据当前工时 / 人员配置就地刷新提示与按钮（不重建输入框，避免打断输入）
+  function refreshValidity() {
+    const missing = props.filter(p => crew.durations[p] === null);
+    const blank = crew.workers.map(w => w.trim()).filter(w => !w);
+    const dup = new Set(crew.workers.map(w => w.trim())).size !== crew.workers.length;
+    const lines = [];
+    if (over) {
+      const parts = overSteps.map(({ s, i }) =>
+        `第 ${i + 1} 段撤下 ${(s.removed || []).length} 项、摆上 ${(s.added || []).length} 项`);
+      lines.push(`存在超过每阶段 ${MAX_SCHED_TASKS} 项任务上限的阶段（${parts.join('；')}），`
+        + '撤下与摆上各自不得超过 14 项，无法排班，请先调整节目单或道具集合。');
+    }
+    if (missing.length) {
+      lines.push(`还有 ${missing.length} 件道具未填写正整数工时：${missing.slice(0, 8).map(escapeHtml).join('、')}`
+        + (missing.length > 8 ? ' 等' : ''));
+    }
+    if (blank.length) lines.push('存在空白的工作人员姓名，请补全。');
+    if (dup) lines.push('工作人员姓名不能重复。');
+    if (!steps.length) lines.push('当前节目单没有待执行的开场或换景步骤（可能已全部完成），无需排班。');
+    warn.innerHTML = lines.map(x => `<div>⚠ ${x}</div>`).join('');
+    warn.style.display = lines.length ? '' : 'none';
+    btn.disabled = over || missing.length > 0 || blank.length > 0 || dup || !steps.length;
+  }
+  refreshValidity();
+  wrap.appendChild(warn);
+
+  const resultBox = document.createElement('div');
+  resultBox.id = 'schedule-result';
+  wrap.appendChild(resultBox);
+
+  // 有效旧排班直接重绘
+  if (state.schedule) resultBox.appendChild(scheduleResultBlock(state.schedule));
+  return wrap;
+}
+
+async function doSchedule(data, btn) {
+  const crew = state.crew;
+  const steps = pendingScheduleSteps(data);
+  const durations = {};
+  for (const [p, v] of Object.entries(crew.durations)) {
+    if (v !== null && Number.isInteger(v) && v > 0) durations[p] = v;
+  }
+  btn.disabled = true;
+  let res;
+  try {
+    res = await api('/api/schedule', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        workers: crew.workers.map(w => w.trim()),
+        durations,
+        steps: steps.map(s => ({
+          type: s.type,
+          phase: s.phase,
+          scene: s.scene,
+          from: s.from,
+          to: s.to,
+          fromStage: s.fromStage,
+          removed: s.removed,
+          added: s.added,
+        })),
+      }),
+    });
+  } finally {
+    btn.disabled = false;
+  }
+  const box = document.getElementById('schedule-result');
+  box.innerHTML = '';
+  if (!res.ok) {
+    box.appendChild(errorBlock(res.errors && res.errors.length ? res.errors : ['排班失败，请检查工作人员与工时配置']));
+    return;
+  }
+  res.scheduleKey = scheduleStepsKey(steps);
+  state.schedule = res;
+  box.appendChild(scheduleResultBlock(res));
+}
+
+/** 排班结果：全场汇总 + 各段"撤下 / 摆上"两阶段分工。 */
+function scheduleResultBlock(data) {
+  const frag = document.createDocumentFragment();
+
+  // 每人全场累计工作时间
+  const perWorker = new Map(data.workers.map(w => [w, 0]));
+  for (const seg of data.segments) {
+    for (const phase of [seg.remove, seg.add]) {
+      for (const a of phase.assignments) perWorker.set(a.worker, (perWorker.get(a.worker) || 0) + a.minutes);
+    }
+  }
+
+  const summary = document.createElement('div');
+  summary.className = 'timed-summary schedule-summary';
+  summary.innerHTML =
+    `<span>全场搬运最短耗时：<strong>${data.totalDuration}</strong> 分钟</span>`
+    + `<span>待执行段落：<strong>${data.segments.length}</strong> 段</span>`
+    + `<span>工作人员：<strong>${data.workerCount}</strong> 名（${data.workers.map(escapeHtml).join('、')}）</span>`
+    + `<span class="hint">各人累计搬运：${[...perWorker.entries()].map(([w, t]) => `${escapeHtml(w)} ${t} 分`).join('｜')}</span>`;
+  frag.appendChild(summary);
+
+  data.segments.forEach((seg) => {
+    const card = document.createElement('div');
+    card.className = 'sched-seg';
+
+    const head = document.createElement('div');
+    head.className = 'sched-seg-head';
+    head.innerHTML =
+      `<span class="sched-seg-title">第 ${seg.index} 段　${escapeHtml(segmentTitle(seg))}</span>`
+      + `<span>任务 ${seg.taskCount} 项 ｜ 撤下 <strong>${seg.remove.makespan}</strong> 分`
+      + ` → 摆上 <strong>${seg.add.makespan}</strong> 分 ｜ 本段共 <strong>${seg.duration}</strong> 分`
+      + `（全场 ${seg.start}～${seg.end} 分）</span>`;
+    card.appendChild(head);
+
+    const cols = document.createElement('div');
+    cols.className = 'sched-phases';
+    cols.appendChild(schedulePhaseBlock('撤下', seg.remove, seg.start, 'remove', data.workers));
+    cols.appendChild(schedulePhaseBlock('摆上', seg.add, seg.start + seg.remove.makespan, 'add', data.workers));
+    card.appendChild(cols);
+
+    frag.appendChild(card);
+  });
+  return frag;
+}
+
+function schedulePhaseBlock(title, phase, base, kind, workers) {
+  const col = document.createElement('div');
+  col.className = `sched-phase sched-phase-${kind}`;
+  const h = document.createElement('div');
+  h.className = 'sched-phase-title';
+  h.innerHTML = `📤 ${title}　<span class="hint">${phase.taskCount} 项，${phase.makespan} 分钟</span>`;
+  col.appendChild(h);
+
+  if (!phase.taskCount) {
+    const none = document.createElement('p');
+    none.className = 'hint';
+    none.textContent = '（本阶段无任务）';
+    col.appendChild(none);
+    return col;
+  }
+
+  // 按人员序号分组展示（workerIndex 即排班返回的稳定顺序），组内即时间顺序
+  const byWorker = workers.map(() => []);
+  for (const a of phase.assignments) {
+    if (byWorker[a.workerIndex]) byWorker[a.workerIndex].push(a);
+  }
+  const ul = document.createElement('ul');
+  ul.className = 'sched-assign-list';
+  workers.forEach((w, wi) => {
+    const list = byWorker[wi];
+    const li = document.createElement('li');
+    const who = document.createElement('span');
+    who.className = 'sched-worker';
+    const busy = list.reduce((acc, a) => acc + a.minutes, 0);
+    who.innerHTML = `<strong>${escapeHtml(w)}</strong><em class="hint">${busy} 分${list.length ? '' : '（本阶段空闲）'}</em>`;
+    li.appendChild(who);
+
+    const detail = document.createElement('div');
+    detail.className = 'sched-tasks';
+    if (!list.length) {
+      const idle = document.createElement('span');
+      idle.className = 'hint';
+      idle.textContent = '—';
+      detail.appendChild(idle);
+    }
+    list.forEach((a, i) => {
+      if (i > 0) {
+        const arrow = document.createElement('span');
+        arrow.className = 'sched-arrow';
+        arrow.textContent = '→';
+        detail.appendChild(arrow);
+      }
+      const chip = document.createElement('span');
+      chip.className = 'sched-task';
+      chip.title = '方括号内为该任务在整场搬运时间轴上的起止（分钟，以本阶段起点为 0 换算）';
+      chip.innerHTML = `${escapeHtml(a.prop)}（${a.minutes}′）`
+        + `<em>[${base + a.start}～${base + a.end}]</em>`;
+      detail.appendChild(chip);
+    });
+    li.appendChild(detail);
+    ul.appendChild(li);
+  });
+  col.appendChild(ul);
+  return col;
 }
 
 function comparisonBlock(data) {
@@ -1203,6 +1590,7 @@ function adoptAlternative(data, alt) {
   delete adopted.alternatives;
   state.live = adopted;
   state.replan = null;
+  clearSchedule(); // 采用备选后节目单已改变
   renderResult(adopted);
   showStatus(`已采用方案 ${alt.rank}：后续可在「🎬 演出中重排」中确认已完成前缀并按此顺序继续演出`);
 }
@@ -1271,6 +1659,8 @@ async function loadPlan() {
   lastPackingItemsKey = null;
   state.live = null;
   state.replan = null;
+  state.crew = null; // 载入方案后排班需按新节目单重新填写工时
+  state.schedule = null;
   if (data.plan.replanState && Array.isArray(data.plan.replanState.prefixIds)
       && data.plan.replanState.prefixIds.length) {
     state.savedReplan = {
@@ -1404,6 +1794,8 @@ function newPlan() {
   state.replan = null;
   state.savedReplan = null;
   state.packing = defaultPacking();
+  state.crew = null;
+  state.schedule = null;
   $('#plan-name').value = '';
   $('#plan-select').value = '';
   applyMode('classic');

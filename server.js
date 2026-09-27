@@ -4,6 +4,7 @@ const path = require('path');
 const express = require('express');
 const { solve, replan, MAX_SCENES, MAX_ALTERNATIVES, normalizeProps } = require('./solver');
 const { packItems, validatePacking } = require('./packing');
+const { validateSchedule, scheduleSteps } = require('./scheduling');
 const store = require('./store');
 
 const app = express();
@@ -258,6 +259,13 @@ app.post('/api/pack', (req, res) => {
   const { errors, items, capacity, pairs } = validatePacking(req.body);
   if (errors.length) return res.status(400).json({ ok: false, errors });
   res.json(packItems(items, capacity, pairs));
+});
+
+/** 换景人员排班：仅对待执行的开场与换景步骤，求人员并行搬运的最短完工方案 */
+app.post('/api/schedule', (req, res) => {
+  const { errors, workers, pendingSteps, durations } = validateSchedule(req.body);
+  if (errors.length) return res.status(400).json({ ok: false, errors });
+  res.json(scheduleSteps(pendingSteps, workers, durations));
 });
 
 app.get('/api/plans', (req, res) => {
