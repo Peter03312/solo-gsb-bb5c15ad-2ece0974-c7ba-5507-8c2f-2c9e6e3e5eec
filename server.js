@@ -4,6 +4,7 @@ const path = require('path');
 const express = require('express');
 const { solve, replan, MAX_SCENES, MAX_ALTERNATIVES, normalizeProps } = require('./solver');
 const { packItems, validatePacking } = require('./packing');
+const { scheduleCrew, validateSchedule } = require('./scheduling');
 const store = require('./store');
 
 const app = express();
@@ -258,6 +259,13 @@ app.post('/api/pack', (req, res) => {
   const { errors, items, capacity, pairs } = validatePacking(req.body);
   if (errors.length) return res.status(400).json({ ok: false, errors });
   res.json(packItems(items, capacity, pairs));
+});
+
+/** 换景人员排班：只为待执行的开场/换景段排班，每段先撤后摆，2～4 人并行 */
+app.post('/api/schedule', (req, res) => {
+  const { errors, workers, workerNames, steps, minutes, names } = validateSchedule(req.body);
+  if (errors.length) return res.status(400).json({ ok: false, errors });
+  res.json(scheduleCrew(steps, workers, workerNames, minutes, names));
 });
 
 app.get('/api/plans', (req, res) => {
